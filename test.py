@@ -1,5 +1,6 @@
 import streamlit as st
 import mysql.connector as connector
+import pandas as pd
 
 con=connector.connect(host='localhost',
                   port='3306',
@@ -20,6 +21,14 @@ def create_custtable():
 #create_custtable()
 def create_accttable():
     cur.execute('create table if not exists account(accountnumber int primary key,FOREIGN KEY(accountnumber) REFERENCES customer(accountnumber), balance float DEFAULT 0)')
+    con.commit()
+
+def create_trantable():
+    cur.execute('create table if not exists transaction(from_acct int, to_acct int, amt float, ts DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP)')
+    con.commit()
+
+def create_depdrawtable():
+    cur.execute('create table if not exists depdraw(accountnumber int, action varchar(15),balance float, ts DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP)')
     con.commit()
 
 
@@ -44,7 +53,41 @@ def deposit(balance,accountnumber):
         'balance':balance,
         'accountnumber':accountnumber,
                 })
+    create_depdrawtable()
+    action='deposit'
+    cur.execute('INSERT INTO depdraw(accountnumber,action,balance) VALUES(%(accountnumber)s,%(action)s,%(balance)s)',
+                {
+        'accountnumber':accountnumber,
+        'action':action,
+        'balance':balance,
+                })
     con.commit()
+
+def witdraw(balance,accountnumber):
+    cur.execute('SELECT balance from account where accountnumber=%(accountnumber)s',
+                {
+        'accountnumber':accountnumber,
+                })
+    row=cur.fetchone()
+    if balance>row[0]:
+        st.warning("Insuffient balance, check bal!")
+    else:
+        cur.execute('UPDATE account set balance=balance - %(balance)s where accountnumber=%(accountnumber)s',
+                {
+        'balance':balance,
+        'accountnumber':accountnumber,
+                })
+        create_depdrawtable()
+        action='withdraw'
+        cur.execute('INSERT INTO depdraw(accountnumber,action,balance) VALUES(%(accountnumber)s,%(action)s,%(balance)s)',
+                    {
+            'accountnumber':accountnumber,
+            'action':action,
+            'balance':balance,
+                    })
+        con.commit()
+        st.success("success")
+        
 
 def showbal(accountnumber):
     cur.execute('SELECT balance from account where accountnumber=%(accountnumber)s',
@@ -52,12 +95,59 @@ def showbal(accountnumber):
         'accountnumber':accountnumber,
                 })
     
-    
-    for (i) in cur:
-        st.write(i[0])
+    row=cur.fetchone()
+    st.write(row[0])
     con.commit()
-    
 
+def transfer(from_acc,accountnumber,amt):
+    cur.execute('SELECT accountnumber from account where accountnumber=%(accountnumber)s',
+                {
+        'accountnumber':accountnumber,
+                })
+    
+    row = cur.fetchone()
+    con.commit()
+    if row == None:
+        st.warning("Account does not exist")   
+    else:
+        cur.execute('SELECT balance from account where accountnumber=%(accountnumber)s',
+                    {
+            'accountnumber':from_acc,
+                    })
+        row=cur.fetchone()
+        #st.write(type(row))
+        #st.write(row)
+        if amt>row[0]:
+            st.warning('Insuffient funds')
+        else:
+            #st.write('Transaction possible')
+            deposit(amt,accountnumber)
+            witdraw(amt,from_acc)
+            create_trantable()
+            cur.execute('INSERT INTO transaction(from_acct,to_acct,amt) VALUES(%(from_acct)s,%(to_acct)s,%(amt)s)',
+                {
+                'from_acct':from_acc,
+                'to_acct':accountnumber,
+                'amt':amt,
+                })
+            st.success('Transfer complete')
+            con.commit()
+
+def show_trans(accountnumber):
+    cur.execute('SELECT * from transaction where from_acct=%(accountnumber)s',
+                {
+        'accountnumber':accountnumber,
+                })
+    data=cur.fetchall()
+    return data
+
+def show_depdraw(accountnumber):
+    cur.execute('SELECT * from depdraw where accountnumber=%(accountnumber)s',
+                {
+        'accountnumber':accountnumber,
+                })
+    data=cur.fetchall()
+    return data
 
 
 def login(accountnumber,Password):
@@ -70,7 +160,7 @@ def login(accountnumber,Password):
 
 
 def main():
-    st.title("Onlline Banking App")
+    st.title("Online Banking App")
 
     menu = ["Home","Login","SignUp"]
     choice = st.sidebar.selectbox("Menu",menu)
@@ -91,7 +181,7 @@ def main():
 
                 st.success("Logged In as {}".format(accountnumber))
 
-                task = st.selectbox("Action",['Deposit','Withdraw','Check Balance','Transfer'])
+                task = st.selectbox("Action",['Deposit','Withdraw','Check Balance','Transfer','Cards','Loan','Transaction History','Withdraw/Deposit History'])
                 if task == "Deposit":
                     st.subheader("Deposit money")
                     money = st.number_input("Money",min_value =10.00,max_value=1000000.00)
@@ -101,6 +191,11 @@ def main():
 
                 elif task == "Withdraw":
                     st.subheader("withdraw")
+                    money = st.number_input("Money",min_value =10.00,max_value=1000000.00)
+                    if st.button("withdraw"):
+                        witdraw(money,accountnumber)
+                        
+
 
                 elif task == "Check Balance":
                     st.subheader("Check Balance")
@@ -109,6 +204,40 @@ def main():
 
                 elif task == "Transfer":
                     st.subheader("Transfer")
+                    amt = st.number_input("Money",min_value =10.00,max_value=1000000.00)
+                    a_n = st.number_input("Account Number",min_value=1111111111,max_value=9999999999)
+                    if st.button("transfer"):
+                        transfer(accountnumber,a_n,amt)
+
+                elif task == "Cards":
+                    st.subheader("Cards")
+                    card=st.selectbox("Type of card",['Credit card','Debit card'])
+
+                    if card == "Credit card":
+                        st.subheader("Credit card")
+
+                    elif card == "Debit card":
+                        st.subheader("Debit card")
+
+                elif task == "Loan":
+                    st.subheader("Loan")
+
+                elif task == "Transaction History":
+                    st.subheader("Transaction History")
+                    results=show_trans(accountnumber)
+                    
+                    with st.expander("History"):
+                        df=pd.DataFrame(results)
+                        st.dataframe(df)
+
+                elif task == "Withdraw/Deposit History":
+                    st.subheader("Withdraw/Deposit History")
+                    results=show_depdraw(accountnumber)
+                    
+                    with st.expander("History"):
+                        df=pd.DataFrame(results)
+                        st.dataframe(df)
+
             else:
                 st.warning("Incorrect Username/Password")
     
